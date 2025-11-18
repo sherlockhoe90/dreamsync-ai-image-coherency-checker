@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>DreamSync — UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+    <style>
+        body { padding: 20px; }
+        .thumb { max-width:120px; max-height:90px; object-fit:cover; border-radius:4px; }
+        .pair-card { margin-bottom:12px; }
+        pre { white-space:pre-wrap; }
+    </style>
+</head>
+<body>
+<div class="container">
+<!--    <h3 class="mb-3">DreamSync — demo UI</h3>-->
+    <h3 class="mb-3">DreamSync - AI Image Coherency Checker</h3>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>Create Project</h5>
+            <div class="form-inline">
+                <input id="projectName" class="form-control mr-2" placeholder="Project name" />
+                <button id="createProjectBtn" class="btn btn-primary">Create</button>
+            </div>
+            <div id="projectCreated" class="mt-2"></div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>Create Scene</h5>
+            <div class="form-row">
+                <div class="col">
+                    <select id="projectSelect" class="form-control"></select>
+                </div>
+                <div class="col">
+                    <input id="sceneTitle" class="form-control" placeholder="Scene title"/>
+                </div>
+                <div class="col">
+                    <input id="sceneDesc" class="form-control" placeholder="Scene description"/>
+                </div>
+                <div class="col-auto">
+                    <button id="createSceneBtn" class="btn btn-success">Create Scene</button>
+                </div>
+            </div>
+            <div id="sceneCreated" class="mt-2"></div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>Upload Image to Scene</h5>
+            <div class="form-row">
+                <div class="col">
+                    <select id="sceneSelect" class="form-control"></select>
+                </div>
+                <div class="col">
+                    <input id="fileInput" type="file" class="form-control-file"/>
+                </div>
+                <div class="col-auto">
+                    <button id="uploadBtn" class="btn btn-info">Upload</button>
+                </div>
+            </div>
+            <div id="uploadResult" class="mt-2"></div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>Run Consistency Check</h5>
+            <div class="form-inline">
+                <select id="analysisProjectSelect" class="form-control mr-2"></select>
+                <button id="analyzeBtn" class="btn btn-warning">Analyze</button>
+            </div>
+            <div id="analysisResult" class="mt-3"></div>
+        </div>
+    </div>
+
+    <hr/>
+<!--    <div class="text-muted small">Dev notes: This UI calls your backend APIs at same origin. If your Spring Boot runs on a different host:port, update API_BASE in the script below.</div>-->
+</div>
+
+<script>
+    const API_BASE = ''; // empty = same origin; set to 'http://localhost:8080' if needed
+
+    // DOM elements
+    const projectName = document.getElementById('projectName');
+    const createProjectBtn = document.getElementById('createProjectBtn');
+    const projectCreated = document.getElementById('projectCreated');
+    const projectSelect = document.getElementById('projectSelect');
+    const analysisProjectSelect = document.getElementById('analysisProjectSelect');
+
+    const sceneTitle = document.getElementById('sceneTitle');
+    const sceneDesc = document.getElementById('sceneDesc');
+    const createSceneBtn = document.getElementById('createSceneBtn');
+    const sceneCreated = document.getElementById('sceneCreated');
+    const sceneSelect = document.getElementById('sceneSelect');
+
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadResult = document.getElementById('uploadResult');
+
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const analysisResult = document.getElementById('analysisResult');
+
+    // helper: populate project selects
+    async function loadProjects() {
+        // backend does not provide list endpoint by default; we will rely on created projects in this session
+        // but try GET /api/projects/:id won't work. We'll cache created projects locally during this UI session.
+        const cached = JSON.parse(localStorage.getItem('ds_projects') || '[]');
+        refreshProjectSelects(cached);
+    }
+
+    function refreshProjectSelects(projects) {
+        // projects = [{id, name}]
+        [projectSelect, analysisProjectSelect].forEach(sel => {
+            sel.innerHTML = '';
+            const def = document.createElement('option'); def.value=''; def.text='-- select project --';
+            sel.appendChild(def);
+            projects.forEach(p => {
+                const o = document.createElement('option'); o.value = p.id; o.text = p.name + ' (id:'+p.id+')';
+                sel.appendChild(o);
+            });
+        });
+        // also refresh projectSelect used for scene creation
+        projectCreated.innerText = '';
+    }
+
+    function storeProject(project) {
+        const list = JSON.parse(localStorage.getItem('ds_projects') || '[]');
+        list.push(project);
+        localStorage.setItem('ds_projects', JSON.stringify(list));
+        refreshProjectSelects(list);
+    }
+
+    function storeScene(scene) {
+        const list = JSON.parse(localStorage.getItem('ds_scenes') || '[]');
+        list.push(scene);
+        localStorage.setItem('ds_scenes', JSON.stringify(list));
+        refreshSceneSelect();
+    }
+
+    function refreshSceneSelect() {
+        const list = JSON.parse(localStorage.getItem('ds_scenes') || '[]');
+        sceneSelect.innerHTML = '';
+        const def = document.createElement('option'); def.value=''; def.text='-- select scene --';
+        sceneSelect.appendChild(def);
+        list.forEach(s=>{
+            const o = document.createElement('option'); o.value=s.id; o.text = s.title + ' (id:'+s.id+', project:'+ (s.project? s.project.id : '?') +')';
+            sceneSelect.appendChild(o);
+        });
+    }
+
+    // create project
+    createProjectBtn.addEventListener('click', async () => {
+        const name = projectName.value && projectName.value.trim();
+        if (!name) { projectCreated.innerText = 'Enter a project name'; return; }
+        try {
+            const res = await fetch(API_BASE + '/api/projects', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ name })
+            });
+            const json = await res.json();
+            projectCreated.innerText = 'Created project id ' + json.id;
+            storeProject(json);
+            projectName.value = '';
+        } catch (err) {
+            console.error(err); projectCreated.innerText = 'Error creating project: ' + err.message;
+        }
+    });
+
+    // create scene
+    createSceneBtn.addEventListener('click', async () => {
+        const pid = projectSelect.value;
+        const title = sceneTitle.value && sceneTitle.value.trim();
+        const desc = sceneDesc.value && sceneDesc.value.trim();
+        if (!pid) { sceneCreated.innerText = 'Select a project first'; return; }
+        if (!title) { sceneCreated.innerText = 'Enter scene title'; return; }
+        try {
+            const res = await fetch(API_BASE + '/api/projects/' + pid + '/scenes', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ title, description: desc })
+            });
+            const json = await res.json();
+            sceneCreated.innerText = 'Scene created id ' + json.id;
+            storeScene(json);
+            sceneTitle.value = ''; sceneDesc.value = '';
+        } catch (err) {
+            console.error(err); sceneCreated.innerText = 'Error: ' + err.message;
+        }
+    });
+
+    // upload file
+    uploadBtn.addEventListener('click', async () => {
+        const sid = sceneSelect.value;
+        const file = fileInput.files && fileInput.files[0];
+        if (!sid) { uploadResult.innerText = 'Select a scene'; return; }
+        if (!file) { uploadResult.innerText = 'Choose a file'; return; }
+        uploadResult.innerText = 'Uploading...';
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+            const res = await fetch(API_BASE + '/api/scenes/' + sid + '/image', {
+                method: 'POST',
+                body: fd
+            });
+            const json = await res.json();
+            uploadResult.innerHTML = '<div>Uploaded asset id ' + json.id + ' <br/><img src="/' + json.filename + '" class="thumb mt-2" onerror="this.style.display=\'none\'"/></div>';
+            // note: json.filename is a server path; thumbnails might not load unless you expose uploads dir via static mapping.
+            // store asset in local cache for demo
+            const assets = JSON.parse(localStorage.getItem('ds_assets') || '[]');
+            assets.push(json);
+            localStorage.setItem('ds_assets', JSON.stringify(assets));
+        } catch (err) {
+            console.error(err); uploadResult.innerText = 'Upload failed: ' + err.message;
+        }
+    });
+
+    // analyze
+    analyzeBtn.addEventListener('click', async () => {
+        const pid = analysisProjectSelect.value;
+        if (!pid) { analysisResult.innerText = 'Select project to analyze'; return; }
+        analysisResult.innerHTML = '<div class="text-info">Analyzing...</div>';
+        try {
+            const res = await fetch(API_BASE + '/api/projects/' + pid + '/consistency');
+            const json = await res.json();
+            renderAnalysis(json);
+        } catch (err) {
+            console.error(err); analysisResult.innerText = 'Error: ' + err.message;
+        }
+    });
+
+    // render analysis results
+    function renderAnalysis(json) {
+        analysisResult.innerHTML = '';
+        if (!json || (!json.imagePairs && !json.textIssues)) {
+            analysisResult.innerText = 'No results';
+            return;
+        }
+
+        // show summary
+        const header = document.createElement('div');
+        header.innerHTML = '<h5>Analysis — project ' + (json.projectId || '') + '</h5>';
+        analysisResult.appendChild(header);
+
+        // image pairs
+        const pairs = json.imagePairs || [];
+        pairs.forEach((p, idx) => {
+            const card = document.createElement('div');
+            card.className = 'card pair-card';
+            const cb = document.createElement('div'); cb.className = 'card-body';
+            let title = '<strong>Pair:</strong> Scene ' + p.sceneA + ' vs Scene ' + p.sceneB;
+            title += ' — <em>' + (p.isSimilar ? 'Similar' : 'Inconsistent') + '</em>';
+            title += ' (hamming=' + p.hamming + ', colorDist=' + (p.colorDistance? p.colorDistance.toFixed(1):'n/a') + ')';
+            cb.innerHTML = '<h6>' + title + '</h6>';
+
+            // thumbnails: try to show filenames if the server exposes them - otherwise skip
+            const thumbRow = document.createElement('div'); thumbRow.className = 'mb-2';
+            try {
+                // attempt to create <img> if explanationLines include filename props or if p contains aSceneFilename / bSceneFilename
+                // fallback: show no thumbnail
+                // If your server exposes uploads under /uploads/... you can build correct src url.
+            } catch (e) {}
+
+            cb.appendChild(thumbRow);
+
+            // explanation summary and expandable lines
+            const sum = document.createElement('div');
+            sum.innerHTML = '<p><strong>Summary:</strong> ' + (p.explanationSummary ? escapeHtml(p.explanationSummary) : '—') + '</p>';
+            cb.appendChild(sum);
+
+            if (p.explanationLines && Array.isArray(p.explanationLines)) {
+                const ul = document.createElement('ul');
+                p.explanationLines.forEach(line => {
+                    const li = document.createElement('li');
+                    li.innerText = line;
+                    ul.appendChild(li);
+                });
+                cb.appendChild(ul);
+            }
+
+            // raw JSON toggle
+            const rawBtn = document.createElement('button');
+            rawBtn.className = 'btn btn-sm btn-outline-secondary mr-2';
+            rawBtn.textContent = 'Show raw';
+            const pre = document.createElement('pre');
+            pre.style.display = 'none';
+            pre.innerText = JSON.stringify(p, null, 2);
+            rawBtn.addEventListener('click', () => {
+                pre.style.display = pre.style.display === 'none' ? 'block' : 'none';
+            });
+            cb.appendChild(rawBtn);
+            cb.appendChild(pre);
+
+            card.appendChild(cb);
+            analysisResult.appendChild(card);
+        });
+
+        // text issues
+        const ti = json.textIssues || [];
+        if (ti.length > 0) {
+            const tcard = document.createElement('div');
+            tcard.className = 'card mt-3';
+            const tb = document.createElement('div'); tb.className='card-body';
+            tb.innerHTML = '<h6>Text issues</h6>';
+            ti.forEach(issue => {
+                const p = document.createElement('p');
+                p.innerHTML = '<strong>' + escapeHtml(issue.token) + '</strong> appears in scenes: ' + Array.from(issue.appearsInScenes || []).join(', ');
+                tb.appendChild(p);
+            });
+            tcard.appendChild(tb);
+            analysisResult.appendChild(tcard);
+        }
+
+    }
+
+    function escapeHtml(s) {
+        if (!s) return '';
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // initialization
+    (function init() {
+        loadProjects();
+        refreshSceneSelect();
+        // If you previously created projects in localStorage, they will appear
+    })();
+</script>
+
+</body>
+</html>
